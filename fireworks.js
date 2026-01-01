@@ -20,6 +20,17 @@ let autoMode = true; // 默认开启自动模式
 let textOpacity = 0; // 文字透明度
 let textScale = 0.5; // 文字缩放
 let animationStartTime = Date.now() + 1000; // 延迟1秒开始文字动画
+let customText = '2026'; // 默认文字
+
+// 按钮点击事件处理
+document.getElementById('startButton').addEventListener('click', () => {
+    const input = document.getElementById('customTextInput').value.trim();
+    if (input) {
+        customText = input;
+    }
+    // 隐藏输入框弹窗
+    document.getElementById('inputModal').style.display = 'none';
+});
 
 // 颜色方案（更绚烂的配色）
 const colors = {
@@ -283,7 +294,7 @@ class Firework {
     }
 }
 
-// ===== "2026" 文字渲染 =====
+// ===== 自定义文字渲染 =====
 function draw2026Text() {
     ctx.save();
 
@@ -326,7 +337,7 @@ function draw2026Text() {
     gradient.addColorStop(1, '#FF1493'); // 深粉色
 
     // 使用手写风格字体（按优先级尝试）
-    const fontSize = Math.min(width, height) * 0.38; // 更大字体，布满屏幕
+    const fontSize = Math.min(width, height) * 0.15; // 适中的字体大小
     ctx.font = `${fontSize}px "Brush Script MT", "Comic Sans MS", "Chalkboard SE", "Lucida Handwriting", cursive, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -341,7 +352,16 @@ function draw2026Text() {
     // 绘制文字主体（纯渐变填充，无背景效果）
     ctx.globalAlpha = textOpacity;
     ctx.fillStyle = gradient;
-    ctx.fillText('2026', width / 2, height / 2);
+
+    // 支持多行文字
+    const lines = customText.split('\n');
+    const lineHeight = fontSize * 1.2;
+    const totalHeight = (lines.length - 1) * lineHeight;
+    const startY = height / 2 - totalHeight / 2;
+
+    lines.forEach((line, index) => {
+        ctx.fillText(line, width / 2, startY + index * lineHeight);
+    });
 
     ctx.restore();
 }
@@ -376,7 +396,7 @@ function animate() {
     // 恢复正常混合模式
     ctx.globalCompositeOperation = 'source-over';
 
-    // 绘制"2026"文字
+    // 绘制自定义文字
     draw2026Text();
 
     // 自动模式

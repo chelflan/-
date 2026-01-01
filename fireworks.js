@@ -16,11 +16,13 @@ window.addEventListener('resize', () => {
 // ===== 全局变量 =====
 const particles = [];
 const fireworks = [];
+const stars = []; // 星星数组
 let autoMode = true; // 默认开启自动模式
 let textOpacity = 0; // 文字透明度
 let textScale = 0.5; // 文字缩放
 let animationStartTime = Date.now() + 1000; // 延迟1秒开始文字动画
 let customText = '2026'; // 默认文字
+let flashIntensity = 0; // 屏幕闪光强度
 
 // ===== 音效系统 =====
 class SoundManager {
@@ -286,6 +288,49 @@ const colors = {
     sparkle: ['#FFFFFF', '#FFFACD', '#FFD700'] // 闪烁色
 };
 
+// ===== 星星类 =====
+class Star {
+    constructor() {
+        this.x = Math.random() * width;
+        this.y = Math.random() * height * 0.7; // 只在上方70%区域显示星星
+        this.size = Math.random() * 1.5 + 0.5;
+        this.baseAlpha = Math.random() * 0.5 + 0.3;
+        this.twinkleSpeed = Math.random() * 0.02 + 0.01;
+        this.twinkleOffset = Math.random() * Math.PI * 2;
+    }
+
+    draw(ctx, time) {
+        // 闪烁效果
+        const alpha = this.baseAlpha + Math.sin(time * this.twinkleSpeed + this.twinkleOffset) * 0.2;
+
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+        ctx.fill();
+
+        // 偶尔添加十字星光
+        if (Math.random() < 0.01) {
+            ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.5})`;
+            ctx.lineWidth = 0.5;
+            ctx.beginPath();
+            ctx.moveTo(this.x - this.size * 2, this.y);
+            ctx.lineTo(this.x + this.size * 2, this.y);
+            ctx.moveTo(this.x, this.y - this.size * 2);
+            ctx.lineTo(this.x, this.y + this.size * 2);
+            ctx.stroke();
+        }
+    }
+}
+
+// 初始化星星背景
+function initStars() {
+    const starCount = Math.floor((width * height) / 8000); // 根据屏幕面积决定星星数量
+    for (let i = 0; i < starCount; i++) {
+        stars.push(new Star());
+    }
+}
+initStars();
+
 // ===== 粒子类 =====
 class Particle {
     constructor(x, y, color, velocity, life = 1) {
@@ -388,9 +433,9 @@ class Firework {
     }
 
     update() {
-        // 保存轨迹
+        // 保存轨迹（增加轨迹长度）
         this.trail.push({ x: this.x, y: this.y });
-        if (this.trail.length > 10) {
+        if (this.trail.length > 20) { // 增加到20个点
             this.trail.shift();
         }
 
@@ -407,8 +452,26 @@ class Firework {
     }
 
     draw(ctx) {
-        // 绘制上升轨迹（更明显）
+        // 绘制上升轨迹（增强版）
         if (this.trail.length > 1) {
+            // 绘制渐变尾迹
+            for (let i = 0; i < this.trail.length - 1; i++) {
+                const point = this.trail[i];
+                const nextPoint = this.trail[i + 1];
+                const progress = i / this.trail.length; // 0到1
+
+                ctx.beginPath();
+                ctx.moveTo(point.x, point.y);
+                ctx.lineTo(nextPoint.x, nextPoint.y);
+
+                // 渐变效果：尾部细且淡，头部粗且亮
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 2 + progress * 4; // 2-6px渐变
+                ctx.globalAlpha = progress * 0.8; // 渐变透明度
+                ctx.stroke();
+            }
+
+            // 添加整体发光效果
             ctx.beginPath();
             ctx.moveTo(this.trail[0].x, this.trail[0].y);
             for (let i = 1; i < this.trail.length; i++) {
@@ -416,29 +479,33 @@ class Firework {
             }
             ctx.lineTo(this.x, this.y);
 
-            // 使用更亮、更粗的轨迹
             ctx.strokeStyle = this.color;
-            ctx.lineWidth = 4; // 增加轨迹粗细
-            ctx.globalAlpha = 0.8; // 增加不透明度
+            ctx.lineWidth = 12;
+            ctx.globalAlpha = 0.2;
+            ctx.shadowColor = this.color;
+            ctx.shadowBlur = 20;
             ctx.stroke();
-
-            // 添加发光效果
-            ctx.strokeStyle = this.color;
-            ctx.lineWidth = 8;
-            ctx.globalAlpha = 0.3;
-            ctx.stroke();
-
+            ctx.shadowBlur = 0;
             ctx.globalAlpha = 1;
         }
 
-        // 绘制火箭头（更大、更亮）
+        // 绘制火箭头（更大、更亮、多重发光）
         ctx.beginPath();
-        ctx.arc(this.x, this.y, 5, 0, Math.PI * 2); // 增加火箭头大小
+        ctx.arc(this.x, this.y, 6, 0, Math.PI * 2);
+
+        // 多重发光效果
         ctx.fillStyle = this.color;
-        ctx.shadowColor = this.color; // 添加发光
+        ctx.shadowColor = this.color;
+        ctx.shadowBlur = 20;
+        ctx.fill();
+
+        // 添加白色核心
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#FFFFFF';
         ctx.shadowBlur = 10;
         ctx.fill();
-        ctx.shadowBlur = 0; // 重置shadow
+        ctx.shadowBlur = 0;
     }
 
     explode() {
@@ -447,7 +514,10 @@ class Firework {
         // 播放爆炸音效
         soundManager.playExplosion();
 
-        const particleCount = 100; // 减少粒子数量
+        // 添加屏幕闪光效果
+        flashIntensity = 0.15; // 瞬间闪亮
+
+        const particleCount = 150; // 增加粒子数量，更密集
 
         // 判断是否在上方区域爆炸（需要粒子向下扩散覆盖屏幕）
         const isTopArea = this.targetY < height * 0.45;
@@ -596,11 +666,18 @@ function draw2026Text() {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    // 2.5秒后添加发光效果
+    // 增强的脉动发光效果
     if (elapsed > 2500) {
-        const glowIntensity = (Math.sin(elapsed / 200) + 1) * 0.5; // 0到1之间的脉动
+        const glowIntensity = (Math.sin(elapsed / 300) + 1) * 0.5; // 0到1之间的脉动（更慢）
+
+        // 多层发光效果
+        // 外层：橙红色光晕
+        ctx.shadowColor = '#FF6B35';
+        ctx.shadowBlur = 10 + glowIntensity * 15; // 10-25px
+
+        // 中层：金色光晕
         ctx.shadowColor = '#FFD700';
-        ctx.shadowBlur = 3 + glowIntensity * 5; // 3-8之间的精细发光
+        ctx.shadowBlur = 5 + glowIntensity * 10; // 5-15px
     }
 
     // 绘制文字主体（纯渐变填充，无背景效果）
@@ -624,9 +701,24 @@ function draw2026Text() {
 let animationStartTimeGlobal = Date.now(); // 全局动画开始时间
 
 function animate() {
+    const currentTime = Date.now();
+
     // 使用半透明黑色实现拖尾效果
     ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
     ctx.fillRect(0, 0, width, height);
+
+    // 绘制星星背景
+    ctx.globalCompositeOperation = 'source-over';
+    stars.forEach(star => star.draw(ctx, currentTime));
+
+    // 添加屏幕闪光效果
+    if (flashIntensity > 0.01) {
+        ctx.fillStyle = `rgba(255, 255, 255, ${flashIntensity})`;
+        ctx.fillRect(0, 0, width, height);
+        flashIntensity *= 0.85; // 快速衰减
+    } else {
+        flashIntensity = 0;
+    }
 
     // 启用发光模式（关键技巧）
     ctx.globalCompositeOperation = 'lighter';

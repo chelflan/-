@@ -22,6 +22,184 @@ let textScale = 0.5; // 文字缩放
 let animationStartTime = Date.now() + 1000; // 延迟1秒开始文字动画
 let customText = '2026'; // 默认文字
 
+// ===== 音效系统 =====
+class SoundManager {
+    constructor() {
+        this.audioContext = null;
+        this.enabled = true;
+        this.bgmGain = null;
+        this.bgmPlaying = false;
+        this.bgmInterval = null;
+    }
+
+    init() {
+        try {
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (e) {
+            console.warn('Web Audio API 不支持');
+            this.enabled = false;
+        }
+    }
+
+    playExplosion() {
+        if (!this.enabled || !this.audioContext) return;
+
+        const ctx = this.audioContext;
+        const t = ctx.currentTime;
+
+        // 创建噪声节点（爆炸声）
+        const bufferSize = ctx.sampleRate * 0.5; // 0.5秒
+        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+
+        // 生成白噪声
+        for (let i = 0; i < bufferSize; i++) {
+            data[i] = Math.random() * 2 - 1;
+        }
+
+        const noise = ctx.createBufferSource();
+        noise.buffer = buffer;
+
+        // 滤波器（低通，让声音更沉闷）
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(1000, t);
+        filter.frequency.exponentialRampToValueAtTime(100, t + 0.3);
+
+        // 音量包络
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.3, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.3);
+
+        // 连接节点
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+
+        // 播放
+        noise.start(t);
+        noise.stop(t + 0.3);
+    }
+
+    playLaunch() {
+        if (!this.enabled || !this.audioContext) return;
+
+        const ctx = this.audioContext;
+        const t = ctx.currentTime;
+
+        // 创建振荡器（发射声）
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(400, t);
+        osc.frequency.exponentialRampToValueAtTime(800, t + 0.2);
+
+        // 音量包络
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.05, t);
+        gain.gain.linearRampToValueAtTime(0, t + 0.2);
+
+        // 连接节点
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        // 播放
+        osc.start(t);
+        osc.stop(t + 0.2);
+    }
+
+    // 播放欢快背景音乐
+    startBGM() {
+        if (!this.enabled || !this.audioContext || this.bgmPlaying) return;
+
+        this.bgmPlaying = true;
+        const ctx = this.audioContext;
+
+        // 创建主音量控制
+        this.bgmGain = ctx.createGain();
+        this.bgmGain.gain.value = 0.15; // 背景音乐音量较低
+        this.bgmGain.connect(ctx.destination);
+
+        // 欢快的旋律：C大调简单欢快曲调
+        const melody = [
+            { note: 523.25, duration: 0.15 },  // C5
+            { note: 587.33, duration: 0.15 },  // D5
+            { note: 659.25, duration: 0.15 },  // E5
+            { note: 783.99, duration: 0.3 },   // G5
+            { note: 659.25, duration: 0.15 },  // E5
+            { note: 587.33, duration: 0.15 },  // D5
+            { note: 523.25, duration: 0.3 },   // C5
+            { note: 392.00, duration: 0.2 },   // G4
+            { note: 440.00, duration: 0.2 },   // A4
+            { note: 493.88, duration: 0.4 },   // B4
+            { note: 523.25, duration: 0.15 },  // C5
+            { note: 659.25, duration: 0.15 },  // E5
+            { note: 783.99, duration: 0.4 },   // G5
+        ];
+
+        let noteIndex = 0;
+        let startTime = ctx.currentTime;
+
+        const playNote = () => {
+            if (!this.bgmPlaying) return;
+
+            const noteData = melody[noteIndex];
+            const t = startTime;
+
+            // 主旋律
+            this.playNoteWithInstrument(noteData.note, t, noteData.duration, 'sine', 0.3);
+
+            // 伴奏（低八度）
+            this.playNoteWithInstrument(noteData.note / 2, t, noteData.duration, 'triangle', 0.15);
+
+            // 装饰音（偶尔添加）
+            if (Math.random() < 0.3) {
+                const decorationNote = noteData.note * 1.5; // 五度音
+                this.playNoteWithInstrument(decorationNote, t + noteData.duration * 0.5, noteData.duration * 0.3, 'sine', 0.1);
+            }
+
+            startTime += noteData.duration;
+            noteIndex = (noteIndex + 1) % melody.length;
+
+            // 循环播放
+            this.bgmInterval = setTimeout(playNote, noteData.duration * 1000 - 50);
+        };
+
+        playNote();
+    }
+
+    playNoteWithInstrument(frequency, startTime, duration, type, volume) {
+        const ctx = this.audioContext;
+
+        const osc = ctx.createOscillator();
+        osc.type = type;
+        osc.frequency.value = frequency;
+
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0, startTime);
+        gain.gain.linearRampToValueAtTime(volume, startTime + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
+
+        osc.connect(gain);
+        gain.connect(this.bgmGain);
+
+        osc.start(startTime);
+        osc.stop(startTime + duration);
+    }
+
+    stopBGM() {
+        this.bgmPlaying = false;
+        if (this.bgmInterval) {
+            clearTimeout(this.bgmInterval);
+            this.bgmInterval = null;
+        }
+        if (this.bgmGain) {
+            this.bgmGain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 0.5);
+        }
+    }
+}
+
+const soundManager = new SoundManager();
+
 // 按钮点击事件处理
 document.getElementById('startButton').addEventListener('click', () => {
     const input = document.getElementById('customTextInput').value.trim();
@@ -30,6 +208,12 @@ document.getElementById('startButton').addEventListener('click', () => {
     }
     // 隐藏输入框弹窗
     document.getElementById('inputModal').style.display = 'none';
+
+    // 初始化音效系统
+    soundManager.init();
+
+    // 启动背景音乐
+    soundManager.startBGM();
 });
 
 // 颜色方案（更绚烂的配色）
@@ -121,6 +305,9 @@ class Firework {
         this.exploded = false;
         this.color = this.pickColor();
         this.trail = [];
+
+        // 播放发射音效
+        soundManager.playLaunch();
     }
 
     pickColor() {
@@ -193,6 +380,10 @@ class Firework {
 
     explode() {
         this.exploded = true;
+
+        // 播放爆炸音效
+        soundManager.playExplosion();
+
         const particleCount = 100; // 减少粒子数量
 
         // 判断是否在上方区域爆炸（需要粒子向下扩散覆盖屏幕）

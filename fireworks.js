@@ -30,6 +30,8 @@ class SoundManager {
         this.bgmGain = null;
         this.bgmPlaying = false;
         this.bgmInterval = null;
+        this.bgmElement = null; // 新增：用于存储音频元素
+        this.bgmSource = null; // 新增：用于存储音频源节点
     }
 
     init() {
@@ -107,17 +109,53 @@ class SoundManager {
         osc.stop(t + 0.2);
     }
 
-    // 播放欢快背景音乐
-    startBGM() {
+    // 播放背景音乐（使用音频文件）
+    async startBGM() {
+        if (!this.enabled || !this.audioContext || this.bgmPlaying) return;
+
+        try {
+            const ctx = this.audioContext;
+
+            // 如果音频上下文处于挂起状态，恢复它
+            if (ctx.state === 'suspended') {
+                await ctx.resume();
+            }
+
+            // 创建 HTML audio 元素（更兼容本地文件）
+            this.bgmElement = new Audio('bgm.mp3');
+            this.bgmElement.loop = true; // 循环播放
+            this.bgmElement.volume = 0.4; // 音量
+
+            // 创建音频源并连接到 Web Audio API
+            this.bgmSource = ctx.createMediaElementSource(this.bgmElement);
+            this.bgmGain = ctx.createGain();
+            this.bgmGain.gain.value = 0.4;
+
+            // 连接节点
+            this.bgmSource.connect(this.bgmGain);
+            this.bgmGain.connect(ctx.destination);
+
+            // 播放音频
+            await this.bgmElement.play();
+            this.bgmPlaying = true;
+
+            console.log('背景音乐播放成功');
+
+        } catch (error) {
+            console.warn('背景音乐加载失败:', error);
+            console.log('将使用代码生成的音乐作为备选方案');
+            // 如果音频文件加载失败，回退到代码生成的音乐
+            this.bgmElement = null;
+            this.startFallbackBGM();
+        }
+    }
+
+    // 备用方案：代码生成的音乐
+    startFallbackBGM() {
         if (!this.enabled || !this.audioContext || this.bgmPlaying) return;
 
         this.bgmPlaying = true;
         const ctx = this.audioContext;
-
-        // 创建主音量控制
-        this.bgmGain = ctx.createGain();
-        this.bgmGain.gain.value = 0.15; // 背景音乐音量较低
-        this.bgmGain.connect(ctx.destination);
 
         // 欢快的旋律：C大调简单欢快曲调
         const melody = [
@@ -188,11 +226,36 @@ class SoundManager {
 
     stopBGM() {
         this.bgmPlaying = false;
+
+        // 停止 audio 元素
+        if (this.bgmElement) {
+            this.bgmElement.pause();
+            this.bgmElement.currentTime = 0;
+            this.bgmElement = null;
+        }
+
+        // 停止音频源（用于 buffer 模式）
+        if (this.bgmSource) {
+            try {
+                // 对于 MediaElementSource，不需要 stop()
+                // 对于 BufferSource，需要 stop()
+                if (this.bgmSource.stop) {
+                    this.bgmSource.stop();
+                }
+            } catch (e) {
+                // 忽略已经停止的错误
+            }
+            this.bgmSource = null;
+        }
+
+        // 清除定时器
         if (this.bgmInterval) {
             clearTimeout(this.bgmInterval);
             this.bgmInterval = null;
         }
-        if (this.bgmGain) {
+
+        // 淡出音量
+        if (this.bgmGain && this.audioContext) {
             this.bgmGain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 0.5);
         }
     }
@@ -216,11 +279,11 @@ document.getElementById('startButton').addEventListener('click', () => {
     soundManager.startBGM();
 });
 
-// 颜色方案（更绚烂的配色）
+// 颜色方案（参考视频：橙红渐变 + 蓝色点缀）
 const colors = {
-    warm: ['#FF6B6B', '#FFA500', '#FFD700', '#FF4500', '#FF69B4', '#FF1493', '#FFB347'], // 红、橙、黄、粉
-    cool: ['#00CED1', '#32CD32', '#1E90FF', '#00FF7F', '#FF00FF', '#00BFFF'], // 蓝、绿、紫
-    sparkle: ['#FFFFFF', '#FFFACD', '#FFD700', '#FF69B4'] // 闪烁色（白、柠檬、金、粉）
+    warm: ['#FFD700', '#FFA500', '#FF6B35', '#FF4500', '#FF1493', '#FF69B4', '#FFB347'], // 金黄→橙→橙红→粉（主色调）
+    cool: ['#1E90FF', '#00BFFF', '#00CED1', '#87CEEB'], // 蓝色点缀（更亮的蓝色）
+    sparkle: ['#FFFFFF', '#FFFACD', '#FFD700'] // 闪烁色
 };
 
 // ===== 粒子类 =====
@@ -311,10 +374,10 @@ class Firework {
     }
 
     pickColor() {
-        // 70% 暖色，20% 冷色，10% 闪烁色
+        // 60% 暖色（橙红），30% 冷色（蓝色点缀），10% 闪烁色
         const rand = Math.random();
         let palette;
-        if (rand < 0.7) {
+        if (rand < 0.6) {
             palette = colors.warm;
         } else if (rand < 0.9) {
             palette = colors.cool;
@@ -558,6 +621,8 @@ function draw2026Text() {
 }
 
 // ===== 动画循环 =====
+let animationStartTimeGlobal = Date.now(); // 全局动画开始时间
+
 function animate() {
     // 使用半透明黑色实现拖尾效果
     ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
@@ -590,26 +655,37 @@ function animate() {
     // 绘制自定义文字
     draw2026Text();
 
-    // 自动模式
-    if (autoMode && Math.random() < 0.05) { // 增加触发频率
-        const x = Math.random() * width * 0.8 + width * 0.1;
-        // 烟花在不同高度均匀分布爆炸：5%-15%, 15%-30%, 30%-45%, 45%-60%, 60%-75%
-        const range = Math.floor(Math.random() * 5);
-        let y;
-        if (range === 0) {
-            y = Math.random() * height * 0.10 + height * 0.05; // 5%-15%
-        } else if (range === 1) {
-            y = Math.random() * height * 0.15 + height * 0.15; // 15%-30%
-        } else if (range === 2) {
-            y = Math.random() * height * 0.15 + height * 0.30; // 30%-45%
-        } else if (range === 3) {
-            y = Math.random() * height * 0.15 + height * 0.45; // 45%-60%
-        } else {
-            y = Math.random() * height * 0.15 + height * 0.60; // 60%-75%
+    // 自动模式：由缓到急的节奏
+    if (autoMode) {
+        const elapsed = (Date.now() - animationStartTimeGlobal) / 1000; // 秒
+
+        // 触发频率随时间增加：从 0.02 逐渐增加到 0.15
+        // 前5秒慢，5秒后逐渐加快
+        let triggerChance = 0.02;
+        if (elapsed > 5) {
+            triggerChance = Math.min(0.02 + (elapsed - 5) * 0.01, 0.15);
         }
-        const types = ['sphere', 'star', 'column', 'heart', 'spiral'];
-        const type = types[Math.floor(Math.random() * types.length)];
-        fireworks.push(new Firework(x, y, type));
+
+        if (Math.random() < triggerChance) {
+            const x = Math.random() * width * 0.8 + width * 0.1;
+            // 烟花在不同高度均匀分布爆炸：5%-15%, 15%-30%, 30%-45%, 45%-60%, 60%-75%
+            const range = Math.floor(Math.random() * 5);
+            let y;
+            if (range === 0) {
+                y = Math.random() * height * 0.10 + height * 0.05; // 5%-15%
+            } else if (range === 1) {
+                y = Math.random() * height * 0.15 + height * 0.15; // 15%-30%
+            } else if (range === 2) {
+                y = Math.random() * height * 0.15 + height * 0.30; // 30%-45%
+            } else if (range === 3) {
+                y = Math.random() * height * 0.15 + height * 0.45; // 45%-60%
+            } else {
+                y = Math.random() * height * 0.15 + height * 0.60; // 60%-75%
+            }
+            const types = ['sphere', 'star', 'column', 'heart', 'spiral'];
+            const type = types[Math.floor(Math.random() * types.length)];
+            fireworks.push(new Firework(x, y, type));
+        }
     }
 
     requestAnimationFrame(animate);

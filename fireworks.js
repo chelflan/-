@@ -16,6 +16,7 @@ window.addEventListener('resize', () => {
 // ===== 全局变量 =====
 const particles = [];
 const fireworks = [];
+const pathFireworks = []; // 路径烟花数组
 const stars = []; // 星星数组
 let autoMode = true; // 默认开启自动模式
 let textOpacity = 0; // 文字透明度
@@ -23,6 +24,9 @@ let textScale = 0.5; // 文字缩放
 let animationStartTime = Date.now() + 1000; // 延迟1秒开始文字动画
 let customText = '2026'; // 默认文字
 let flashIntensity = 0; // 屏幕闪光强度
+let pathDrawingPhase = true; // 路径绘制阶段
+let pathDrawingStartTime = Date.now() + 1000; // 路径绘制开始时间
+let lastLaunchedCharIndex = -1; // 最后发射的字符索引
 
 // ===== 音效系统 =====
 class SoundManager {
@@ -399,6 +403,235 @@ class Particle {
     }
 }
 
+// ===== 路径数据定义 =====
+// 为"2026"创建路径点（基于屏幕相对坐标 0-1）
+function getTextPaths(text, centerX, centerY, fontSize) {
+    const paths = [];
+    const scale = fontSize * 0.8; // 字符大小
+
+    // 每个字符的相对偏移
+    const charSpacing = scale * 0.7;
+    const startX = centerX - (text.length * charSpacing) / 2 + charSpacing / 2;
+
+    for (let charIndex = 0; charIndex < text.length; charIndex++) {
+        const char = text[charIndex];
+        const offsetX = startX + charIndex * charSpacing - centerX;
+        const charPaths = getCharPaths(char, centerX + offsetX, centerY, scale);
+        paths.push(...charPaths);
+    }
+
+    return paths;
+}
+
+// 单个字符的路径定义
+function getCharPaths(char, offsetX, offsetY, scale) {
+    const paths = [];
+
+    switch (char) {
+        case '2':
+            // 数字"2"：上半圆弧 + 下半横线 + 斜线
+            paths.push([
+                { x: offsetX - 0.25 * scale, y: offsetY - 0.25 * scale },
+                { x: offsetX - 0.2 * scale, y: offsetY - 0.35 * scale },
+                { x: offsetX, y: offsetY - 0.4 * scale },
+                { x: offsetX + 0.2 * scale, y: offsetY - 0.35 * scale },
+                { x: offsetX + 0.25 * scale, y: offsetY - 0.25 * scale },
+                { x: offsetX + 0.25 * scale, y: offsetY - 0.15 * scale },
+                { x: offsetX + 0.2 * scale, y: offsetY - 0.1 * scale },
+                { x: offsetX, y: offsetY },
+                { x: offsetX - 0.2 * scale, y: offsetY + 0.1 * scale },
+                { x: offsetX - 0.25 * scale, y: offsetY + 0.2 * scale },
+                { x: offsetX - 0.25 * scale, y: offsetY + 0.3 * scale },
+                { x: offsetX, y: offsetY + 0.4 * scale },
+                { x: offsetX + 0.25 * scale, y: offsetY + 0.35 * scale }
+            ]);
+            break;
+
+        case '0':
+            // 数字"0"：椭圆形
+            paths.push([
+                { x: offsetX + 0.25 * scale, y: offsetY },
+                { x: offsetX + 0.2 * scale, y: offsetY - 0.25 * scale },
+                { x: offsetX, y: offsetY - 0.4 * scale },
+                { x: offsetX - 0.2 * scale, y: offsetY - 0.25 * scale },
+                { x: offsetX - 0.25 * scale, y: offsetY },
+                { x: offsetX - 0.2 * scale, y: offsetY + 0.25 * scale },
+                { x: offsetX, y: offsetY + 0.4 * scale },
+                { x: offsetX + 0.2 * scale, y: offsetY + 0.25 * scale },
+                { x: offsetX + 0.25 * scale, y: offsetY }
+            ]);
+            break;
+
+        case '6':
+            // 数字"6"：上半圆 + 下半弧
+            paths.push([
+                { x: offsetX + 0.1 * scale, y: offsetY - 0.1 * scale },
+                { x: offsetX + 0.15 * scale, y: offsetY - 0.25 * scale },
+                { x: offsetX, y: offsetY - 0.4 * scale },
+                { x: offsetX - 0.15 * scale, y: offsetY - 0.25 * scale },
+                { x: offsetX - 0.2 * scale, y: offsetY },
+                { x: offsetX - 0.15 * scale, y: offsetY + 0.15 * scale },
+                { x: offsetX, y: offsetY + 0.3 * scale },
+                { x: offsetX + 0.15 * scale, y: offsetY + 0.35 * scale },
+                { x: offsetX + 0.25 * scale, y: offsetY + 0.2 * scale },
+                { x: offsetX + 0.25 * scale, y: offsetY + 0.1 * scale }
+            ]);
+            break;
+
+        default:
+            // 默认：简单圆形
+            paths.push([
+                { x: offsetX + 0.2 * scale, y: offsetY },
+                { x: offsetX, y: offsetY + 0.2 * scale },
+                { x: offsetX - 0.2 * scale, y: offsetY },
+                { x: offsetX, y: offsetY - 0.2 * scale }
+            ]);
+            break;
+    }
+
+    return paths;
+}
+
+// ===== 路径烟花类 =====
+class PathFirework {
+    constructor(path, color) {
+        this.path = path; // 路径点数组 [{x, y}, ...]
+        this.pathIndex = 0; // 当前路径点索引
+        this.x = path[0].x;
+        this.y = path[0].y;
+        this.targetX = path[path.length - 1].x;
+        this.targetY = path[path.length - 1].y;
+        this.color = color;
+        this.exploded = false;
+        this.trail = [];
+        this.speed = 0.15; // 沿路径移动速度（每帧移动路径的百分比）
+
+        // 播放发射音效
+        soundManager.playLaunch();
+    }
+
+    update() {
+        if (this.exploded) return;
+
+        // 保存轨迹
+        this.trail.push({ x: this.x, y: this.y });
+        if (this.trail.length > 25) {
+            this.trail.shift();
+        }
+
+        // 沿路径移动
+        this.pathIndex += this.speed;
+
+        if (this.pathIndex >= this.path.length - 1) {
+            // 到达路径终点，爆炸
+            this.explode();
+        } else {
+            // 线性插值计算当前位置
+            const index = Math.floor(this.pathIndex);
+            const nextIndex = Math.min(index + 1, this.path.length - 1);
+            const t = this.pathIndex - index;
+
+            const currentPoint = this.path[index];
+            const nextPoint = this.path[nextIndex];
+
+            this.x = currentPoint.x + (nextPoint.x - currentPoint.x) * t;
+            this.y = currentPoint.y + (nextPoint.y - currentPoint.y) * t;
+        }
+    }
+
+    draw(ctx) {
+        // 绘制路径轨迹（增强版）
+        if (this.trail.length > 1) {
+            // 渐变尾迹
+            for (let i = 0; i < this.trail.length - 1; i++) {
+                const point = this.trail[i];
+                const nextPoint = this.trail[i + 1];
+                const progress = i / this.trail.length;
+
+                ctx.beginPath();
+                ctx.moveTo(point.x, point.y);
+                ctx.lineTo(nextPoint.x, nextPoint.y);
+
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 3 + progress * 5;
+                ctx.globalAlpha = progress * 0.9;
+                ctx.stroke();
+            }
+
+            // 整体发光效果
+            ctx.beginPath();
+            ctx.moveTo(this.trail[0].x, this.trail[0].y);
+            for (let i = 1; i < this.trail.length; i++) {
+                ctx.lineTo(this.trail[i].x, this.trail[i].y);
+            }
+            ctx.lineTo(this.x, this.y);
+
+            ctx.strokeStyle = this.color;
+            ctx.lineWidth = 15;
+            ctx.globalAlpha = 0.3;
+            ctx.shadowColor = this.color;
+            ctx.shadowBlur = 25;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = 1;
+        }
+
+        // 绘制烟花头
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 8, 0, Math.PI * 2);
+
+        ctx.fillStyle = this.color;
+        ctx.shadowColor = this.color;
+        ctx.shadowBlur = 30;
+        ctx.fill();
+
+        // 白色核心
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.shadowBlur = 15;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+
+    explode() {
+        this.exploded = true;
+        soundManager.playExplosion();
+        flashIntensity = 0.2;
+
+        // 在终点创建球形爆炸（粒子数较少，因为路径烟花已经很绚丽）
+        const particleCount = 80;
+        const speed = 4;
+
+        for (let i = 0; i < particleCount; i++) {
+            const angle = (Math.PI * 2 / particleCount) * i;
+            const velocity = {
+                x: Math.cos(angle) * speed,
+                y: Math.sin(angle) * speed
+            };
+            particles.push(new Particle(this.x, this.y, this.color, velocity, 1.0));
+        }
+    }
+
+    isDead() {
+        return this.exploded;
+    }
+}
+
+// 发射指定字符的路径烟花
+function launchPathFireworksForChar(charIndex) {
+    if (charIndex >= customText.length) return;
+
+    const fontSize = Math.min(width, height) * 0.15;
+    const paths = getTextPaths(customText[charIndex], width / 2, height / 2, fontSize);
+
+    // 为每个路径发射一个烟花
+    paths.forEach((path) => {
+        const color = colors.warm[Math.floor(Math.random() * colors.warm.length)];
+        pathFireworks.push(new PathFirework(path, color));
+    });
+}
+
 // ===== 烟花类 =====
 class Firework {
     constructor(x, targetY, type = 'sphere') {
@@ -624,21 +857,21 @@ function draw2026Text() {
 
     // 更新文字动画状态
     const elapsed = Math.max(0, Date.now() - animationStartTime); // 确保不会出现负数
-    const animationDuration = 1500; // 1.5秒完成动画（1-2.5秒）
+    const animationDuration = 1500; // 1.5秒完成动画
 
     // 平滑缓动函数（easeOutCubic）
     const progress = Math.min(elapsed / animationDuration, 1);
     const easedProgress = 1 - Math.pow(1 - progress, 3);
 
     textOpacity = easedProgress;
-    textScale = 0.2 + easedProgress * 0.8; // 从 0.2 缩放到 1.0，更明显的"从小到大"效果
+    textScale = 0.2 + easedProgress * 0.8; // 从 0.2 缩放到 1.0
 
     // 移动到中心并缩放
     ctx.translate(width / 2, height / 2);
 
     // 2.5秒后添加抖动效果
     if (elapsed > 2500) {
-        const shakeIntensity = 3; // 抖动强度
+        const shakeIntensity = 3;
         const offsetX = (Math.random() - 0.5) * shakeIntensity;
         const offsetY = (Math.random() - 0.5) * shakeIntensity;
         ctx.translate(offsetX, offsetY);
@@ -661,26 +894,24 @@ function draw2026Text() {
     gradient.addColorStop(1, '#FF1493'); // 深粉色
 
     // 使用手写风格字体（按优先级尝试）
-    const fontSize = Math.min(width, height) * 0.15; // 适中的字体大小
+    const fontSize = Math.min(width, height) * 0.15;
     ctx.font = `${fontSize}px "Brush Script MT", "Comic Sans MS", "Chalkboard SE", "Lucida Handwriting", cursive, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
     // 增强的脉动发光效果
     if (elapsed > 2500) {
-        const glowIntensity = (Math.sin(elapsed / 300) + 1) * 0.5; // 0到1之间的脉动（更慢）
+        const glowIntensity = (Math.sin(elapsed / 300) + 1) * 0.5;
 
         // 多层发光效果
-        // 外层：橙红色光晕
         ctx.shadowColor = '#FF6B35';
-        ctx.shadowBlur = 10 + glowIntensity * 15; // 10-25px
+        ctx.shadowBlur = 10 + glowIntensity * 15;
 
-        // 中层：金色光晕
         ctx.shadowColor = '#FFD700';
-        ctx.shadowBlur = 5 + glowIntensity * 10; // 5-15px
+        ctx.shadowBlur = 5 + glowIntensity * 10;
     }
 
-    // 绘制文字主体（纯渐变填充，无背景效果）
+    // 绘制文字主体
     ctx.globalAlpha = textOpacity;
     ctx.fillStyle = gradient;
 
@@ -723,6 +954,15 @@ function animate() {
     // 启用发光模式（关键技巧）
     ctx.globalCompositeOperation = 'lighter';
 
+    // 更新和绘制路径烟花
+    for (let i = pathFireworks.length - 1; i >= 0; i--) {
+        pathFireworks[i].update();
+        pathFireworks[i].draw(ctx);
+        if (pathFireworks[i].isDead()) {
+            pathFireworks.splice(i, 1);
+        }
+    }
+
     // 更新和绘制烟花
     for (let i = fireworks.length - 1; i >= 0; i--) {
         fireworks[i].update();
@@ -747,12 +987,11 @@ function animate() {
     // 绘制自定义文字
     draw2026Text();
 
-    // 自动模式：由缓到急的节奏
+    // 自动模式：直接开始随机烟花（不使用路径绘制）
     if (autoMode) {
         const elapsed = (Date.now() - animationStartTimeGlobal) / 1000; // 秒
 
         // 触发频率随时间增加：从 0.02 逐渐增加到 0.15
-        // 前5秒慢，5秒后逐渐加快
         let triggerChance = 0.02;
         if (elapsed > 5) {
             triggerChance = Math.min(0.02 + (elapsed - 5) * 0.01, 0.15);
@@ -760,19 +999,19 @@ function animate() {
 
         if (Math.random() < triggerChance) {
             const x = Math.random() * width * 0.8 + width * 0.1;
-            // 烟花在不同高度均匀分布爆炸：5%-15%, 15%-30%, 30%-45%, 45%-60%, 60%-75%
+            // 烟花在不同高度均匀分布爆炸
             const range = Math.floor(Math.random() * 5);
             let y;
             if (range === 0) {
-                y = Math.random() * height * 0.10 + height * 0.05; // 5%-15%
+                y = Math.random() * height * 0.10 + height * 0.05;
             } else if (range === 1) {
-                y = Math.random() * height * 0.15 + height * 0.15; // 15%-30%
+                y = Math.random() * height * 0.15 + height * 0.15;
             } else if (range === 2) {
-                y = Math.random() * height * 0.15 + height * 0.30; // 30%-45%
+                y = Math.random() * height * 0.15 + height * 0.30;
             } else if (range === 3) {
-                y = Math.random() * height * 0.15 + height * 0.45; // 45%-60%
+                y = Math.random() * height * 0.15 + height * 0.45;
             } else {
-                y = Math.random() * height * 0.15 + height * 0.60; // 60%-75%
+                y = Math.random() * height * 0.15 + height * 0.60;
             }
             const types = ['sphere', 'star', 'column', 'heart', 'spiral'];
             const type = types[Math.floor(Math.random() * types.length)];
@@ -806,33 +1045,4 @@ document.addEventListener('keydown', (e) => {
 // ===== 启动动画 =====
 animate();
 
-// 初始烟花（在不同高度均匀分布爆炸）
-setTimeout(() => {
-    fireworks.push(new Firework(width * 0.2, height * 0.08, 'sphere')); // 5%-15%
-    fireworks.push(new Firework(width * 0.8, height * 0.12, 'sphere')); // 5%-15%
-    fireworks.push(new Firework(width * 0.5, height * 0.20, 'star')); // 15%-30%
-}, 500);
-
-setTimeout(() => {
-    fireworks.push(new Firework(width * 0.3, height * 0.10, 'star')); // 5%-15%
-    fireworks.push(new Firework(width * 0.7, height * 0.25, 'star')); // 15%-30%
-    fireworks.push(new Firework(width * 0.15, height * 0.35, 'sphere')); // 30%-45%
-    fireworks.push(new Firework(width * 0.85, height * 0.18, 'sphere')); // 15%-30%
-}, 800);
-
-setTimeout(() => {
-    fireworks.push(new Firework(width * 0.5, height * 0.40, 'column')); // 30%-45%
-    fireworks.push(new Firework(width * 0.25, height * 0.14, 'heart')); // 5%-15%
-    fireworks.push(new Firework(width * 0.75, height * 0.28, 'heart')); // 15%-30%
-    fireworks.push(new Firework(width * 0.4, height * 0.52, 'sphere')); // 45%-60%
-    fireworks.push(new Firework(width * 0.6, height * 0.68, 'sphere')); // 60%-75%
-}, 1000);
-
-setTimeout(() => {
-    fireworks.push(new Firework(width * 0.1, height * 0.38, 'spiral')); // 30%-45%
-    fireworks.push(new Firework(width * 0.9, height * 0.22, 'spiral')); // 15%-30%
-    fireworks.push(new Firework(width * 0.4, height * 0.11, 'sphere')); // 5%-15%
-    fireworks.push(new Firework(width * 0.6, height * 0.32, 'sphere')); // 30%-45%
-    fireworks.push(new Firework(width * 0.25, height * 0.55, 'heart')); // 45%-60%
-    fireworks.push(new Firework(width * 0.75, height * 0.65, 'heart')); // 60%-75%
-}, 1200);
+// 初始烟花已替换为路径烟花系统，自动在 animate() 中发射
